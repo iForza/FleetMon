@@ -43,15 +43,21 @@ npm install -g pm2
 echo "Установка serve..."
 npm install -g serve
 
+# Создаем директории сначала
+echo "Создание директорий..."
+mkdir -p /opt/fleetmon
+mkdir -p /opt/fleetmon/logs
+
 # Создаем пользователя для приложения
 echo "Создание пользователя fleetmon..."
 useradd -r -s /bin/bash -d /opt/fleetmon fleetmon || true
 
-# Создаем директории
-echo "Создание директорий..."
-mkdir -p /opt/fleetmon
-mkdir -p /opt/fleetmon/logs
+# Устанавливаем права доступа
+echo "Настройка прав доступа..."
 chown -R fleetmon:fleetmon /opt/fleetmon
+
+# Убеждаемся что домашняя директория установлена правильно
+usermod -d /opt/fleetmon fleetmon
 
 # Настраиваем PostgreSQL
 echo "Настройка PostgreSQL..."
