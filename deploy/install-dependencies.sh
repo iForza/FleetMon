@@ -31,6 +31,10 @@ apt install -y timescaledb-2-postgresql-14
 # Настраиваем TimescaleDB
 timescaledb-tune --quiet --yes
 
+# Добавляем TimescaleDB в конфигурацию PostgreSQL
+echo "Настройка shared_preload_libraries для TimescaleDB..."
+echo "shared_preload_libraries = 'timescaledb'" >> /etc/postgresql/14/main/postgresql.conf
+
 # Устанавливаем PM2 глобально
 echo "Установка PM2..."
 npm install -g pm2
@@ -54,7 +58,15 @@ echo "Настройка PostgreSQL..."
 systemctl start postgresql
 systemctl enable postgresql
 
+# Перезапускаем PostgreSQL чтобы загрузить TimescaleDB
+echo "Перезапуск PostgreSQL для загрузки TimescaleDB..."
+systemctl restart postgresql
+
+# Ждем запуска сервера
+sleep 5
+
 # Создаем базу данных и пользователя
+echo "Создание базы данных и пользователя..."
 sudo -u postgres psql << EOF
 CREATE USER fleetmon_user WITH PASSWORD 'fleetmon_secure_password_2024';
 CREATE DATABASE fleetmon OWNER fleetmon_user;
@@ -65,6 +77,10 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 \q
 EOF
 
+# Проверяем что расширения установились
+echo "Проверка установленных расширений..."
+sudo -u postgres psql -d fleetmon -c "\dx"
+
 # Настраиваем файрвол
 echo "Настройка файрвола..."
 ufw allow 22
@@ -74,18 +90,23 @@ ufw --force enable
 
 # Настраиваем автозапуск PM2
 echo "Настройка автозапуска PM2..."
-sudo -u fleetmon pm2 startup systemd -u fleetmon --hp /opt/fleetmon
-# Команда выше выведет команду для выполнения от root - её нужно будет выполнить
+PM2_STARTUP_CMD=$(sudo -u fleetmon pm2 startup systemd -u fleetmon --hp /opt/fleetmon | grep "sudo env")
 
-echo "=== Установка зависимостей завершена! ==="
+if [ ! -z "$PM2_STARTUP_CMD" ]; then
+    echo "Выполнение команды PM2 startup..."
+    eval $PM2_STARTUP_CMD
+    echo "PM2 autostart настроен успешно!"
+else
+    echo "ВНИМАНИЕ: Выполните вручную команду PM2 startup, которая будет выведена выше"
+fi
+
+echo "=== Установка зависимостей завершена успешно! ==="
 echo ""
 echo "Следующие шаги:"
-echo "1. Скопируйте код проекта в /opt/fleetmon"
-echo "2. Установите npm зависимости"
-echo "3. Настройте .env файл"
-echo "4. Инициализируйте базу данных"
-echo "5. Соберите frontend"
-echo "6. Запустите приложение через PM2"
+echo "1. Переключитесь на пользователя fleetmon: su - fleetmon"
+echo "2. Перейдите в директорию: cd /opt/fleetmon"
+echo "3. Настройте .env файл: cp .env.production .env && nano .env"
+echo "4. Запустите деплой: ./deploy/deploy-vps.sh"
 echo ""
 echo "Данные для подключения к БД:"
 echo "Host: localhost"
