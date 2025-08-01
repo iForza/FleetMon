@@ -1,0 +1,320 @@
+name: Deploy FleetMon to VPS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy_type:
+        description: 'Deployment type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+env:
+  NODE_VERSION: '18'
+  DOCKER_BUILDKIT: 1
+  COMPOSE_DOCKER_CLI_BUILD: 1
+
+jobs:
+  # Проверка кода и тестирование
+  test:
+    name: Test and Lint
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          npm ci
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Lint backend
+        run: |
+          cd backend
+          npm run lint
+
+      - name: Lint frontend
+        run: |
+          cd frontend
+          npm run lint
+
+      - name: Test backend
+        run: |
+          cd backend
+          npm run test
+
+      - name: Test frontend
+        run: |
+          cd frontend
+          npm run test -- --coverage --watchAll=false
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build
+
+  # Автоматическая версионирование и деплой
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [test]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Get current version
+        id: current_version
+        run: |
+          CURRENT_VERSION=$(node -p "require('./version.json').version")
+          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "Current version: $CURRENT_VERSION"
+
+      - name: Determine version bump type
+        id: version_bump
+        run: |
+          if [[ "${{ github.event.head_commit.message }}" == *"BREAKING CHANGE"* ]]; then
+            echo "type=major" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event.head_commit.message }}" == *"feat:"* ]]; then
+            echo "type=minor" >> $GITHUB_OUTPUT
+          else
+            echo "type=patch" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Bump version
+        id: new_version
+        run: |
+          CURRENT_VERSION="${{ steps.current_version.outputs.version }}"
+          BUMP_TYPE="${{ github.event.inputs.deploy_type || steps.version_bump.outputs.type }}"
+          
+          IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+          MAJOR=${VERSION_PARTS[0]}
+          MINOR=${VERSION_PARTS[1]}
+          PATCH=${VERSION_PARTS[2]}
+          
+          case $BUMP_TYPE in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+          
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+
+      - name: Update version.json
+        run: |
+          node -e "
+          const fs = require('fs');
+          const version = require('./version.json');
+          version.version = '${{ steps.new_version.outputs.version }}';
+          version.lastUpdated = new Date().toISOString();
+          version.build = (version.build || 0) + 1;
+          version.commit = '${{ github.sha }}';
+          version.branch = '${{ github.ref_name }}';
+          fs.writeFileSync('./version.json', JSON.stringify(version, null, 2));
+          "
+
+      - name: Update CHANGELOG.md
+        run: |
+          COMMIT_MESSAGE="${{ github.event.head_commit.message }}"
+          NEW_VERSION="${{ steps.new_version.outputs.version }}"
+          DATE=$(date +%Y-%m-%d)
+          
+          # Создание временного файла с новой записью
+          cat > temp_changelog.md << EOF
+          # Changelog FleetMon
+
+          ## [${NEW_VERSION}] - ${DATE}
+
+          ### Изменения
+          - ${COMMIT_MESSAGE}
+          - Commit: ${{ github.sha }}
+          - Author: ${{ github.actor }}
+
+          EOF
+          
+          # Добавление существующего содержимого (пропускаем первую строку заголовка)
+          tail -n +2 CHANGELOG.md >> temp_changelog.md
+          mv temp_changelog.md CHANGELOG.md
+
+      - name: Commit version bump
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add version.json CHANGELOG.md
+          git commit -m "🚀 Bump version to ${{ steps.new_version.outputs.version }}"
+          git push
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.new_version.outputs.version }}
+          release_name: FleetMon v${{ steps.new_version.outputs.version }}
+          body: |
+            ## Изменения в версии ${{ steps.new_version.outputs.version }}
+
+            **Коммит:** ${{ github.sha }}
+            **Автор:** ${{ github.actor }}
+            **Сообщение:** ${{ github.event.head_commit.message }}
+
+            ### Компоненты
+            - ESP32 Firmware
+            - Node.js Backend API
+            - React Frontend
+            - TimescaleDB Database
+            - MQTT Integration
+
+            ### Развертывание
+            ```bash
+            git pull origin main
+            ./deploy/deploy.sh
+            ```
+
+            **Полный changelog:** [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)
+          draft: false
+          prerelease: false
+
+      - name: Build Docker images
+        run: |
+          echo "Building production Docker images..."
+          docker-compose -f docker-compose.prod.yml build --no-cache
+          
+          # Tag images with version
+          docker tag fleetmon-backend:latest fleetmon-backend:${{ steps.new_version.outputs.version }}
+          docker tag fleetmon-frontend:latest fleetmon-frontend:${{ steps.new_version.outputs.version }}
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -e
+            
+            # Переход в директорию проекта
+            cd /opt/fleetmon || exit 1
+            
+            # Создание резервной копии текущей версии
+            if [ -f "version.json" ]; then
+              sudo -u fleetmon ./deploy/backup-version.sh
+            fi
+            
+            # Обновление кода
+            sudo -u fleetmon git fetch origin
+            sudo -u fleetmon git reset --hard origin/main
+            
+            # Запуск деплоя
+            ./deploy/deploy.sh
+            
+            # Проверка состояния сервисов
+            docker-compose -f docker-compose.prod.yml ps
+            
+            echo "✅ Развертывание FleetMon v${{ steps.new_version.outputs.version }} завершено успешно!"
+
+      - name: Health check
+        run: |
+          sleep 30
+          
+          # Проверка доступности API
+          curl -f ${{ secrets.VPS_HOST }}/api/health || exit 1
+          
+          echo "✅ Health check passed"
+
+      - name: Notify deployment success
+        if: success()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          text: |
+            🚀 FleetMon v${{ steps.new_version.outputs.version }} успешно развернут!
+            
+            📦 Коммит: ${{ github.sha }}
+            👤 Автор: ${{ github.actor }}
+            🌐 URL: https://${{ secrets.VPS_HOST }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Notify deployment failure
+        if: failure()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          text: |
+            ❌ Ошибка развертывания FleetMon v${{ steps.new_version.outputs.version }}
+            
+            📦 Коммит: ${{ github.sha }}
+            👤 Автор: ${{ github.actor }}
+            🔗 Логи: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Ручное развертывание
+  manual_deploy:
+    name: Manual Deploy
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to VPS (Manual)
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            cd /opt/fleetmon
+            ./deploy/deploy.sh
+            echo "✅ Manual deployment completed"

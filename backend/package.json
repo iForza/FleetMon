@@ -1,0 +1,48 @@
+{
+  "name": "fleetmon-backend",
+  "version": "0.1.0",
+  "description": "FleetMon Backend API - Система мониторинга сельскохозяйственной техники",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "iot",
+    "mqtt",
+    "agriculture",
+    "telemetry",
+    "fleet-monitoring"
+  ],
+  "author": "FleetMon Team",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "pg": "^8.11.3",
+    "mqtt": "^5.3.4",
+    "socket.io": "^4.7.4",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "dotenv": "^16.3.1",
+    "winston": "^3.11.0",
+    "express-rate-limit": "^7.1.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/iForza/FleetMon.git"
+  },
+  "bugs": {
+    "url": "https://github.com/iForza/FleetMon/issues"
+  },
+  "homepage": "https://github.com/iForza/FleetMon#readme"
+}
