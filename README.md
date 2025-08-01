@@ -179,7 +179,7 @@ FleetMon/
 ### Первоначальная установка на VPS
 ```bash
 # 1. Клонирование репозитория
-sudo git clone https://github.com/username/FleetMon.git /opt/fleetmon
+sudo git clone https://github.com/iForza/FleetMon.git /opt/fleetmon
 cd /opt/fleetmon
 
 # 2. Полная установка зависимостей и настройка
